@@ -7,167 +7,244 @@ import nltk
 from nltk.tokenize import word_tokenize
 from nltk.chunk import conlltags2tree, tree2conlltags
 import spacy
-from tabula import read_pdf
+
 import pandas as pd
 from datetime import datetime 
 from dateutil import parser  
-nltk.download('averaged_perceptron_tagger')
-nltk.download('punkt')
-nltk.download('maxent_ne_chunker')
-nltk.download('words')
-nltk.download('stopwords')
+
+from fastapi.middleware.cors import CORSMiddleware
+if not nltk.data.find('taggers/averaged_perceptron_tagger'):
+  nltk.download('averaged_perceptron_tagger')
+
+if not nltk.data.find('tokenizers/punkt'):
+  nltk.download('punkt')
+
+if not nltk.data.find('chunkers/maxent_ne_chunker'):
+  nltk.download('maxent_ne_chunker')
+
+if not nltk.data.find('corpora/words'):
+  nltk.download('words')
+
+if not nltk.data.find('corpora/stopwords'):
+  nltk.download('stopwords')
 app=FastAPI()
+origins = ["*"]
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 @app.get('/')
 def index():
     return {"Message":"Api is working!!"}
     
 @app.post("/upload")
 async def upload(file: UploadFile = File(...)):
-    try:
-        contents = await file.read()
-        text = extract_text(io.BytesIO(contents))
-        email = getEmail(text)
-        name=getName(text)
-        skills=getSkill(text)
-        mobile=getPhone(text)
-        education=getEduDetails(text,io.BytesIO(contents))
-        total_experience=getExperience(text)
-    except OSError as e:
-        return {"message": f"Error extracting text: {e}"}
-    except Exception as e:
-        return {"message": str(e)}
-    finally:
-        await file.close()
-
-    return {"Name":name,"Email": email,'Mobile':mobile,'Skills':skills,'Experience':total_experience,'Education':education}
-#RESUME EXTRACTION
-def getEduDetails(extractedText,path):
-  import warnings
-  warnings.filterwarnings("ignore", category=UserWarning, module='tabula')
-
-  reserveWordForInstituteName={
-      "university":"university",
-      "college":"college",
-      "collage":"collage",
-      "institute":"institute"
-      }
-  degreeStartWord={
-      "diploma":"diploma",
-      "bachelor":"bachelor",
-      "graduate":"graduate",
-      "postgraduate":"postgraduate",
-      "master":"master",
-      "bca":"bca",
-      "mca":"mca",
-      "bba":"bba",
-      "mba":"mba",
-      }
-  degreesWord=["B.E","BE","M.E","ME","B.Sc","Bsc","BTech"] 
-  educationDict={}
-  college=""
-  degree=""
-  stream=None
-  clgFound=False
-  degreeFound=False
-  NoTable=False
-  j=0
-  df = read_pdf(path,pages="all")
+  data={}
+  status=None
+  message=None
   try:
-    tableData=df[0].values.tolist()
-    tableData=[data for data in tableData if data!="nan"]
-  except:
-    pass
-  if not df:
-    NoTable=True
-  elif len(tableData)<=1:
-   
-    NoTable=True
-
-  else:
-    tableData=sum(tableData, [])
-    
-    for i in tableData:
-      i=str(i)
-      if re.search("\r",str(i)):
-        i="".join(i).replace("\r"," ")
-      clgData=[text for text in i.split() if text.lower() in reserveWordForInstituteName and not i.lower().startswith(tuple(reserveWordForInstituteName))]
-      degData=[text for text in i.split() if i.lower().startswith(tuple(degreeStartWord))]
-      degAbbData=[i.split() for text in i.split() if re.sub("\W+","",text) in degreesWord]
-
-      if len(clgData)>0:
-        college=i
-        clgFound=True
-      if len(degData)>0:
-        degree=i
-        degreeFound=True
-      if len(degAbbData)>0:
-        degree=degAbbData[0][0]
-        stream=degAbbData[0][1]
-        degreeFound=True
-      if clgFound and degreeFound:
-        
-        j=j+1
-        educationDict["data"+str(j)]={"college":college,"degree":degree,"stream":stream}
-        if stream is not None:
-          stream=None
-        college=""
-        degree=""
-        clgFound=False
-        degreeFound=False
-
-  if NoTable or len(educationDict)==0:
-    
-    for no,line in enumerate(extractedText.split("\n")):
-      # print(no)
-    #institute extraction
-      getEducationOrg=[word for word in line.split() if (re.sub('\W+','', word).lower() in reserveWordForInstituteName or word.lower().startswith(tuple(reserveWordForInstituteName))) and line.lower().startswith(tuple(reserveWordForInstituteName))==False ]
-      if len(getEducationOrg)>0:
-        college=line
-        clgFound=True  
-      #for Degree Extraction
-      getDegreeNm="#".join([line for word in line.split() if re.sub('\W+','', word).lower().startswith(tuple(degreeStartWord))])
-      if len(getDegreeNm)>0:
-        if re.search("#",getDegreeNm,re.IGNORECASE):
-          getDegreeNm=getDegreeNm.split("#")[0]
-        if re.search(" in ",getDegreeNm,re.IGNORECASE):
-          degree,inn,stream=getDegreeNm.partition(" in ")
-        else:
-          degree=getDegreeNm 
-          
-      else:
-        getDegreeAndType="".join([line for word in line.split() if re.sub('\W+','', word) in degreesWord ])
-        if len(getDegreeAndType)>0:
-          degree=getDegreeAndType.split()
-          stream=(re.sub('\W+',' ', " ".join(degree[1:]))).strip()
-          degree=degree[0]
-      if len(degree)>0:
-        degreeFound=True
+      contents = await file.read()
+      text = extract_text(io.BytesIO(contents))
       
-      if degreeFound and clgFound:
+      if len(text)>20:
+        ResumeObj=ResumeExtractor(text)
+        data=ResumeObj.getExtractedData()
+        status="success"
+        message="Resume Successfully Parsed!"
         
-        if (len(degree)-len(degree.strip()))<=1:
-          if stream is None:
+      else:
+        status='failure'
+        message="File does not contains text"
 
-            educationDict["data"+str(j)]={"college":re.sub("[\d\W]+"," ",college),"degree":re.sub("\W+"," ",degree),"stream":stream}
+  except OSError as e:
+
+    status='failure'
+    message=f"Error extracting text: {e}"
+  except Exception as e:
+    status='failure'
+    message=str(e)
+    
+  finally:
+      await file.close()
+      finalData={
+          "status":status,
+          'message':message,
+          'data':data
+        }
+  
+  return finalData
+#RESUME EXTRACTION
+class ResumeExtractor:
+  def __init__(self,inputResumeText):
+    self.inputString=inputResumeText
+
+
+    #required fileds variable
+    self.first_name="not_found"
+    self.last_name="not_found"
+    self.full_name="not_found"
+    self.gender='not_found'
+    self.email='not_found'
+    self.mobile=[]
+    self.skills=[]
+    self.total_exp='0'
+    self.education_details=[]
+
+    #variable that use in operations
+    self.degreeStartWord={
+          "diploma":"diploma",
+          "bachelor":"bachelor",
+          "graduate":"graduate",
+          "postgraduate":"postgraduate",
+          "master":"master",
+          "bca":"bca",
+          "mca":"mca",
+          "bba":"bba",
+          "mba":"mba",
+          }
+    self.degreesWord={
+          "B.E":"B.E",
+          "BE":"BE",
+          "M.E":"M.E",
+          "ME":"ME",
+          "B.SC":"B.SC",
+          "BSC":"BSC",
+          "MSC":"MSC",
+          "BTECH":"BTECH",
+          "BCA":"BCA",
+          "MCA":"MCA",
+          "BBA":"BBA",
+          "MBA":"MBA",
+          }
+    self.reserveWordForInstituteName={
+        "university":"university",
+        "college":"college",
+        "collage":"collage",
+        "institute":"institute"
+        }
+
+    #extract Data
+    self.extractAllData()
+
+
+
+  def extractAllData(self):
+    self.getEmail(self.inputString)
+    self.getName(self.inputString)
+    self.getPhone(self.inputString)
+    self.getSkill(self.inputString)
+    self.getExperience(self.inputString)
+    self.getEducationDetails(self.inputString)
+    
+
+
+
+  def getName(self,inputString):
+    name=""
+    dict={}
+    NameFound=False
+    nameList=[]
+    
+    
+    firstLines=inputString.split("\n")
+    
+    if len(self.email)>0:
+
+      checkStrForName=re.sub('[^A-Za-z]','',self.email.split("@")[0])
+      newtext=[line.strip() for line in firstLines if len(line.split("\t"))==1 and len(line.split())<=5 and len(line.split())!=0]
+      sent=nltk.pos_tag(word_tokenize(" - ".join(newtext)))
+      
+      pattern = 'PROPER: {<NNP|NNPS>+}'
+
+      cp = nltk.RegexpParser(pattern)
+      cs = cp.parse(sent)
+      iob_tagged = tree2conlltags(cs)
+      chunk_tree = conlltags2tree(iob_tagged)
+      n=len(iob_tagged)
+      
+      for i in range(0,n):
+        if (iob_tagged[i][2]=="B-PROPER" or iob_tagged[i][2]=="I-PROPER") and re.fullmatch(r"^[a-zA-Z.]+$",iob_tagged[i][0]):
+          name+=iob_tagged[i][0]+" "
+        if iob_tagged[i][2]=="O" and len(name)>2:
+          nameList.append(name)
+          name=""
+    
+      
+      Name=''
+      for iTerName in nameList:
+        if len(Name.split())<=3:
           
-          elif stream is not None:
-            stream=re.split(r"[,(]", stream)[0]
-            educationDict["data"+str(j)]={"college":re.sub("[\d\W]+"," ",college),"degree":re.sub("\W+"," ",degree),"stream":re.sub("[\d\W]+"," ",stream)}
-            stream=None
-        degreeFound=False
-        clgFound=False
-        college=""
-        degree=""
-        j=j+1
-  return educationDict
-def getExperience(inputString):
+          name=iTerName
+          possibility=SequenceMatcher(None, iTerName.lower(), checkStrForName).ratio()
+          if possibility>=0.50:
+            
+            if iTerName not in Name:
+              Name+=iTerName
+            NameFound=True
+      
+      if NameFound :
+        name=" ".join(set(Name.split()))
+        name=Name.split()
+        if len(name)==1:
+          self.full_name=name
+          self.first_name=name
+        elif len(name)>1:
+          self.first_name=name[0]
+          self.last_name=name[len(name)-1]
+          self.full_name=Name
+
+  def getEmail(self,inputString): 
+    email = None
+    try:
+        pattern = re.compile(r"[a-z0-9\.\-+_]+@[a-z0-9\.\-+_]+\.[a-z]+")
+        matches = pattern.findall(inputString) # Gets all email addresses as a list
+        email = matches
+    except Exception as e:
+        print(e)
+    self.email=" ".join(email)
+  def getPhone(self,inputString):
+    number = ''
+    try:
+        pattern = re.compile(r'([+(]?\d+[)\-]?[ \t\r\f\v]*[(]?\d{2,}[()\-]?[ \t\r\f\v]*\d{2,}[()\-]?[ \t\r\f\v]*\d*[ \t\r\f\v]*\d*[ \t\r\f\v]*)')
+        match = pattern.findall(inputString)
+        match = [re.sub(r'[()\,.]', '', el).strip() for el in match if len(re.sub(r'[()\-.,\D+]', '', el))>9 and len(re.sub(r'[()\-.,\D+]','',el)) <= 15]
+        number = match
+    except:
+        pass
+    self.mobile=number
+  def getSkill(self,inputString):
+    nlp = spacy.load('en_core_web_sm')
+    text=inputString
+    if re.search("skill",text,re.IGNORECASE):
+      text=re.split(r"skill",text,flags=re.IGNORECASE,maxsplit=1)[1]
+    nlp_text=nlp(text)
+    nlp_noun_chunks=list(nlp_text.noun_chunks)
+    tokens = [token.text for token in nlp_text if not token.is_stop]
+    data = pd.read_csv("./skillsOmkar.csv")
+    skills = list(data.columns.values)
+    skillset = []
+    for token in tokens:
+      if token.lower() in skills:
+        skillset.append(token)
+          # print(token)
+    for token in nlp_noun_chunks:
+      token = token.text.lower().strip()
+      if token in skills:
+        skillset.append(token)
+    self.skills=[i.capitalize() for i in set([i.lower() for i in skillset])]
+  def getExperience(self,inputString):
     extractedText=inputString
     total_exp=0
-    if re.search(r"experience|work history|employment",extractedText,flags=re.IGNORECASE):
-      lengthOfSplit=len(re.findall(r"experience|work history|employment",extractedText,flags=re.IGNORECASE))
-      experienceAfterText=re.split(r"experience|work history|employment",extractedText,flags=re.IGNORECASE,maxsplit=lengthOfSplit)[lengthOfSplit]
-      experience_text_for_No_date_mention=re.split(r"experience|work history|employment",extractedText,flags=re.IGNORECASE,maxsplit=1)[1]
-      experienceText=re.split(r"education|hobbies|language|ACADEMIC QUALIFICATIONS",experienceAfterText,flags=re.IGNORECASE,maxsplit=1)[0]  
+    wordsOfStartPoint="experience|work history|employment"
+    wordsOfEndPoint="education|hobbies|language|ACADEMIC QUALIFICATIONS"
+    if re.search(r""+wordsOfStartPoint+"",extractedText,flags=re.IGNORECASE):
+      lengthOfSplit=len(re.findall(r""+wordsOfStartPoint+"",extractedText,flags=re.IGNORECASE))
+      experienceAfterText=re.split(r""+wordsOfStartPoint+"",extractedText,flags=re.IGNORECASE,maxsplit=lengthOfSplit)[lengthOfSplit]
+      experience_text_for_No_date_mention=re.split(r""+wordsOfStartPoint+"",extractedText,flags=re.IGNORECASE,maxsplit=1)[1]
+      experienceText=re.split(r""+wordsOfEndPoint+"",experienceAfterText,flags=re.IGNORECASE,maxsplit=1)[0]  
       experienceText=re.split(r"\s{3,}|:|-|–|to|from|[(|)]|\n",experienceText,flags=re.IGNORECASE)
       experience_list = []
       sectionWords=""
@@ -213,93 +290,112 @@ def getExperience(inputString):
           if len(month_matches)>0:
             for i in month_matches:
               monthList.append(float("0."+i[0]))
+
           total_exp=str(sum(yearList)+sum(monthList))
-        return total_exp
+        self.total_exp=total_exp
       except Exception as e:
-        print(e)
-    else:
-      print("No EXP Found!")
-def getPhone(inputString):
-    number = ''
-    try:
-        pattern = re.compile(r'([+(]?\d+[)\-]?[ \t\r\f\v]*[(]?\d{2,}[()\-]?[ \t\r\f\v]*\d{2,}[()\-]?[ \t\r\f\v]*\d*[ \t\r\f\v]*\d*[ \t\r\f\v]*)')
-        match = pattern.findall(inputString)
-        match = [re.sub(r'[()\,.]', '', el).strip() for el in match if len(re.sub(r'[()\-.,\D+]', '', el))>9 and len(re.sub(r'[()\-.,\D+]','',el)) <= 15]
-        number = match
-    except:
-        pass
-    return number
-def getSkill(inputString):
-	nlp = spacy.load('en_core_web_sm')
-	text=inputString
-	if re.search("skill",text,re.IGNORECASE):
-		text=re.split(r"skill",text,flags=re.IGNORECASE,maxsplit=1)[1]
-	nlp_text=nlp(text)
-	nlp_noun_chunks=list(nlp_text.noun_chunks)
-	tokens = [token.text for token in nlp_text if not token.is_stop]
-	data = pd.read_csv("./skillsOmkar.csv")
-	skills = list(data.columns.values)
-	skillset = []
-	for token in tokens:
-		if token.lower() in skills:
-			skillset.append(token)
-        # print(token)
-	for token in nlp_noun_chunks:
-		token = token.text.lower().strip()
-		if token in skills:
-			skillset.append(token)
-	return [i.capitalize() for i in set([i.lower() for i in skillset])]
-def getEmail(inputString): 
-    email = None
-    try:
-        pattern = re.compile(r"[a-z0-9\.\-+_]+@[a-z0-9\.\-+_]+\.[a-z]+")
-        matches = pattern.findall(inputString) # Gets all email addresses as a list
-        email = matches
-    except Exception as e:
-        print(e)
-    return email
-def similar(a, b):
-    return SequenceMatcher(None, a, b).ratio()
-def getName(inputString):
-  name=""
-  NameFound=False
-  nameList=[]
-  if re.search("Name","\n".join(inputString.split("\n")[:7])):
-    before,key,after=inputString.partition("Name")
-    name +=re.sub("[^A-Z]", " ", after.strip().split("\n")[0],0,re.IGNORECASE).strip()
-  else:
-    firstLines=inputString.split("\n")
-    email=getEmail(inputString)
-    checkStrForName=re.sub('[^A-Za-z]','',email[0].split("@")[0])
-    # print(checkStrForName)
-    newtext=[line.strip() for line in firstLines if len(line.split("\t"))==1 and len(line.split())<=5 and len(line.split())!=0]
-    sent=nltk.pos_tag(word_tokenize(" - ".join(newtext)))
-    pattern = 'PROPER: {<NNP|NNPS>+}'
+        self.total_exp=e
+  def getEducationDetails(self,inputString):
+      institute_name=[]
+      degreeL=[]
+      educationSection="Education|Qualification summary|Educational Qualification|Qualification|Degrees and Qualifications|ACADEMIC QUALIFICATIONS" 
+      if re.search(r""+educationSection+"",inputString,flags=re.IGNORECASE):
+        splitText=re.split(r""+educationSection+"",inputString,flags=re.IGNORECASE,maxsplit=1)[1]
+        nlp = spacy.load('en_core_web_sm')
+        institute=""
+        degree=""
+        institute_found=False
+        degree_found=False
+        for line in inputString.split("\n"):
+          line=str(line).strip("• ")
+          for word in line.split():
+            if (re.sub('\W+','', word).lower() in self.reserveWordForInstituteName or word.lower().startswith(tuple(self.reserveWordForInstituteName))) and line.lower().startswith(tuple(self.reserveWordForInstituteName))==False:
+              line=line.strip()
 
-    cp = nltk.RegexpParser(pattern)
-    cs = cp.parse(sent)
-    iob_tagged = tree2conlltags(cs)
-    chunk_tree = conlltags2tree(iob_tagged)
-    n=len(iob_tagged)
-    
-    for i in range(0,n):
-      if (iob_tagged[i][2]=="B-PROPER" or iob_tagged[i][2]=="I-PROPER") and re.fullmatch(r"^[a-zA-Z.]+$",iob_tagged[i][0]):
-        name+=iob_tagged[i][0]+" "
-      if iob_tagged[i][2]=="O" and len(name)>2:
-        nameList.append(name)
-        name=""
-  processDict={}
-  for iTerName in nameList:
-    name=iTerName
-    possibility=similar(iTerName.lower(),checkStrForName)
-    if possibility>0.58:
-      Name=iTerName
-      NameFound=True
-    elif possibility>0.2 and len(name.split())>1 :
-      cheker=[name for val in name.split() if checkStrForName.startswith(val.lower())]
-      processDict[name]=possibility
+              index = line.lower().find(word.lower())
+              before_text=line[:index]
+              if len(before_text)>0:
+                tagLine=nlp(line)
+                for test in tagLine.ents:
+                  if re.search(r"[^A-Za-z0-9\s]", str(test)):
+                    pass
+                  else:
 
-  if not NameFound:
-    return "Name Not Found"
-  if NameFound:
-    return Name
+                    if test.label_=="ORG":
+                      before_text=str(test)
+                    else:
+                      before_text=re.split(r'(?<![\s\n])\W{2,}|\W{2,}(?![\s\n])', before_text)[-1]
+
+                
+                after_text=re.split(r'(?<!\s)\W{2,}|\W{2,}(?!\s)', line[index:])[0]
+                if after_text in before_text:
+                  final_text=before_text
+                else:
+                  final_text=before_text+" "+after_text
+                if bool(re.search(r'^([a-zA-Z.,]|\s){0,1}([a-zA-Z.,]|\s)*$', final_text)):
+                  institute_found=True
+                  institute=final_text.rstrip(',')
+                  institute_name.append(institute)
+
+          if line.lower().startswith(tuple(self.degreeStartWord)):
+            text=re.split(r"[^a-zA-Z' ]+", line)[0]
+            degree_found=True
+            degree=text
+            degreeL.append(degree)
+          if re.search(r"^(b\.|m\.)", line, flags=re.IGNORECASE):
+            
+            if re.sub('\W+','', line).upper().startswith(tuple(self.degreesWord)):
+              match = re.search(r"[)\]]", line)
+              if match:
+                degree=line[:match.end()]
+                degreeL.append(degree)
+                degree_found=True
+              else:
+                degree=line
+                degreeL.append(degree)
+                degree_found=True
+          for word in re.split(',| |:',line):
+            
+            if (re.sub('\W+','', word) in self.degreesWord) and not word.islower():
+              degree=word
+              degreeL.append(degree)
+              degree_found=True
+            if word.startswith(tuple(self.degreesWord)):
+
+            
+              splitWord=re.split(r"\s*[[(]|\sin\s*", word)
+              if len(splitWord)>1:
+                degree=line
+                degreeL.append(degree)
+                degree_found=True
+          
+          if degree_found and institute_found:
+            
+            self.education_details.append({"course":degree,"institute":institute})
+            degreeL=list(set(degreeL))
+            institute_name=list(set(institute_name))
+            if degree in degreeL:
+              degreeL.remove(degree)
+            if institute in institute_name:
+              institute_name.remove(institute)
+            degree=''
+            institute=''
+            degree_found=False
+            institute_found=False
+        degreeL=list(set(degreeL))
+        institute_name=list(set(institute_name))
+        for degreeWithoutInstitute in degreeL:
+          self.education_details.append({"course":degreeWithoutInstitute,"institute":'not_found'})
+        for instituteWithoutDegree in institute_name:
+          self.education_details.append({"course":'not_found',"institute":instituteWithoutDegree})
+  def getExtractedData(self):
+    return {"first_name":self.first_name,
+    "last_name":self.last_name,
+    "full_Name":self.full_name,
+    "gender":self.gender,
+    "email":self.email,
+    "mobile":self.mobile,
+    "skills":self.skills,
+    "total_exp":self.total_exp,
+    "education_details":self.education_details,
+    }
